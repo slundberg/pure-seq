@@ -1,0 +1,474 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [],
+   "source": [
+    "using PureSeq\n",
+    "using DataStructures\n",
+    "using Gadfly\n",
+    "using GZip"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [],
+   "source": [
+    "type Poisson_regression\n",
+    "    #array of weights\n",
+    "    w\n",
+    "    #w0 constnat\n",
+    "    w_0::Float64\n",
+    "    #learning rate\n",
+    "    eta::Float64\n",
+    "    #decay rate for the learning rate \n",
+    "    alpha::Float64\n",
+    "    #number of samples parsed through (will be incremnted automatically)\n",
+    "    n::Int64\n",
+    "    #number of features\n",
+    "    d::Int64\n",
+    "end"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "poisson_regression (generic function with 1 method)"
+      ]
+     },
+     "execution_count": 5,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "#constructor for convenience\n",
+    "function poisson_regression(;eta::Float64=0.0001, alpha::Float64=1.00, d::Int64=0)\n",
+    "    if d != 0\n",
+    "        model = Poisson_regression(zeros(d), 0.0, eta, alpha, 0, d)\n",
+    "    else\n",
+    "        model = Poisson_regression(nothing, 0.0, eta, alpha, 0, d)\n",
+    "    end\n",
+    "    \n",
+    "    #return the model\n",
+    "    model\n",
+    "end \n",
+    "    "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "metadata": {
+    "collapsed": false,
+    "scrolled": true
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "predict (generic function with 1 method)"
+      ]
+     },
+     "execution_count": 6,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "#prediction using n examles (nxd matrix)\n",
+    "function predict(model::Poisson_regression, x::Array{Float64,2})\n",
+    "    linear_prediction = x*model.w+model.w_0\n",
+    "    prediction = exp(linear_prediction)\n",
+    "end"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "predict (generic function with 2 methods)"
+      ]
+     },
+     "execution_count": 7,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "#prediction using 1xd array \n",
+    "function predict(model::Poisson_regression, x::Array{Float64,1})\n",
+    "    linear_prediction = x*model.w+model.w_0\n",
+    "    prediction = exp(linear_prediction)\n",
+    "end"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "metadata": {
+    "collapsed": false,
+    "scrolled": true
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "fit (generic function with 1 method)"
+      ]
+     },
+     "execution_count": 12,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "#takes in nxd batch data as an input, conducts stochastic gradient descent\n",
+    "function fit(model::Poisson_regression, y::Array{Float64, 1}, x::Array{Float64, 2})\n",
+    "    #checking if y and x match in size\n",
+    "    if length(y)!=size(x)[1]\n",
+    "        return nothing\n",
+    "    end \n",
+    "    \n",
+    "    #initiating weight array if necessary\n",
+    "    if model.d == 0\n",
+    "        model.d = size(x)[2]\n",
+    "        model.w = zeros(model.d)\n",
+    "    end\n",
+    "    \n",
+    "    #updating info (right now its just the number of examples parsed)\n",
+    "    model.n += length(y)\n",
+    "    num_data = length(y)\n",
+    "    \n",
+    "    #making prediction\n",
+    "    prediction = predict(model, x)\n",
+    "    \n",
+    "    #updating w_0\n",
+    "    model.w_0 = model.w_0 + model.eta*(sum(y-prediction, 1)[1]*1.0/num_data)\n",
+    "    \n",
+    "    #updating w\n",
+    "    model.w = model.w + model.eta*((transpose(x)*(y-prediction))/num_data)\n",
+    "    \n",
+    "    model\n",
+    "end "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "#Dense block object\n",
+    "type DenseBlocks\n",
+    "    readers::Array{Any}\n",
+    "    blockSize::Int64\n",
+    "end"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "next (generic function with 109 methods)"
+      ]
+     },
+     "execution_count": 10,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "#Dense block iterator\n",
+    "type DenseBlockIterator\n",
+    "    readers::Array{Any}\n",
+    "    blockSize::Int64\n",
+    "    blockWidth::Int64\n",
+    "    block::Array{Float64,2}\n",
+    "    offset::Int64\n",
+    "    done::Bool\n",
+    "    constantColumn::Bool\n",
+    "end\n",
+    "\n",
+    "function denseblocks(readers, blockSize::Int64; constantColumn=false)\n",
+    "    #width is automatically generated by the size of readers array.\n",
+    "    blockWidth = constantColumn ? length(readers) + 1 : length(readers)\n",
+    "    DenseBlockIterator(readers, blockSize, blockWidth, zeros(Float64, blockSize, blockWidth), 0, false, constantColumn)\n",
+    "end\n",
+    "\n",
+    "Base.start(it::DenseBlockIterator) = 0\n",
+    "Base.done(it::DenseBlockIterator, nil) = it.done\n",
+    "\n",
+    "function Base.next(it::DenseBlockIterator, nil)\n",
+    "    it.done = true\n",
+    "    \n",
+    "    if it.constantColumn\n",
+    "        it.block[:,1:end-1] = 0 #set it back to 0 if needed \n",
+    "    else\n",
+    "        it.block[:,:] = 0\n",
+    "    end\n",
+    "\n",
+    "    # Fill in the block\n",
+    "    for i in 1:length(readers)\n",
+    "        reader = readers[i]\n",
+    "\n",
+    "        #why do we have offset not it.offset here? (and also it.blockSize)\n",
+    "        while !reader.done && reader.position <= it.offset + it.blockSize\n",
+    "            #we want to log transform the reader.value using log(0.01+value) temporarily\n",
+    "            it.block[reader.position - it.offset, i] += 1 #not reader.value right?\n",
+    "            advance!(reader)\n",
+    "            it.done = false\n",
+    "        end\n",
+    "    end\n",
+    "\n",
+    "    # See if we are really done or just found a blank block\n",
+    "    if it.done\n",
+    "        it.done = it.done && target.done\n",
+    "        for i in 1:length(readers)\n",
+    "            it.done = it.done && readers[i].done\n",
+    "        end\n",
+    "    end\n",
+    "    \n",
+    "    # update the offset\n",
+    "    it.offset += it.blockSize\n",
+    "    \n",
+    "\n",
+    "    #log transform the block\n",
+    "\n",
+    "    it.block[:,1], log(it.block[:,2:end] + 0.001)\n",
+    "end"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 15,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Iteration 100 complete..\n",
+      "cur_weight[0.33703293703788434,0.309553597480865]\n",
+      "Iteration 200 complete..\n",
+      "cur_weight[0.3942148194910703,0.33785501505933657]\n",
+      "Iteration 300 complete..\n",
+      "cur_weight[0.43165249871283123,0.34520914931075497]\n",
+      "Iteration 400 complete..\n",
+      "cur_weight[0.4606544286076338,0.34764138397322475]\n",
+      "Iteration 500 complete..\n",
+      "cur_weight[0.48473605752518756,0.3468814751948659]\n",
+      "Iteration 600 complete..\n",
+      "cur_weight[0.5054484046119716,0.346744356946704]\n",
+      "Iteration 700 complete..\n",
+      "cur_weight[0.5234765498873708,0.3486239987076311]\n",
+      "Iteration 800 complete..\n",
+      "cur_weight[0.5391214268239045,0.35298945699526296]\n",
+      "Iteration 900 complete..\n",
+      "cur_weight[0.553050261605561,0.35278639099626724]\n",
+      "Iteration 1000 complete..\n",
+      "cur_weight[0.5659288864717692,0.3507264004445265]\n",
+      "Iteration 1100 complete..\n",
+      "cur_weight[0.578128790032471,0.3299439742785494]\n",
+      "Iteration 1200 complete..\n",
+      "cur_weight[0.5926118270270444,0.2887579845572454]\n",
+      "Iteration 1300 complete..\n",
+      "cur_weight[0.606404864629834,0.3007064702031472]\n",
+      "Iteration 1400 complete..\n",
+      "cur_weight[0.6179599503338232,0.31226155590713656]\n",
+      "Iteration 1500 complete..\n",
+      "cur_weight[0.6283602154352473,0.3056528789079852]\n",
+      "Iteration 1600 complete..\n",
+      "cur_weight[0.6408654791075885,0.26574098139290664]\n",
+      "Iteration 1700 complete..\n",
+      "cur_weight[0.6538868523212474,0.25220014951800296]\n",
+      "Iteration 1800 complete..\n",
+      "cur_weight[0.6668796655555811,0.23868376611710396]\n",
+      "Iteration 1900 complete..\n",
+      "cur_weight[0.680255900927492,0.2236419466976117]\n",
+      "Iteration 2000 complete..\n",
+      "cur_weight[0.6930873914328736,0.2175289668317214]\n",
+      "Iteration 2100 complete..\n",
+      "cur_weight[0.7072230194418524,0.18153539447397912]\n",
+      "Iteration 2200 complete..\n",
+      "cur_weight[0.7214523135108346,0.1705255812335952]\n",
+      "Iteration 2300 complete..\n",
+      "cur_weight[0.7354422447260304,0.16124106527639365]\n",
+      "Iteration 2400 complete..\n",
+      "cur_weight[0.7490468328189153,0.15573171311961592]\n",
+      "Iteration 2500 complete..\n",
+      "cur_weight[0.761647413454374,0.1517781631902393]\n",
+      "Iteration 2600 complete..\n",
+      "cur_weight[0.7742264953531426,0.1364060827449572]\n",
+      "Iteration 2700 complete..\n",
+      "cur_weight[0.78678981312811,0.1275682698139706]\n",
+      "Iteration 2800 complete..\n",
+      "cur_weight[0.7989369015782958,0.11791123739451904]\n",
+      "Iteration 2900 complete..\n",
+      "cur_weight[0.8108049215110982,0.11462994524990477]\n",
+      "Iteration 3000 complete..\n",
+      "cur_weight[0.8219192907700139,0.10908941926564727]\n",
+      "Iteration 3100 complete..\n",
+      "cur_weight[0.8325138163184375,0.10725652339068456]\n",
+      "Iteration 3200 complete..\n",
+      "cur_weight[0.8426951521272894,0.10048256155878747]\n",
+      "Iteration 3300 complete..\n",
+      "cur_weight[0.8527190985979388,0.09284377980708788]\n",
+      "Iteration 3400 complete..\n",
+      "cur_weight[0.8623657743104131,0.09077669919043875]\n",
+      "Iteration 3500 complete..\n",
+      "cur_weight[0.8716522203001407,0.08509468339037177]\n",
+      "Iteration 3600 complete..\n",
+      "cur_weight[0.8807415265056378,0.0811533632191439]\n",
+      "Iteration 3700 complete..\n",
+      "cur_weight[0.889465817008882,0.07693363944207972]\n",
+      "Iteration 3800 complete..\n",
+      "cur_weight[0.8980010475746463,0.0714344728637425]\n",
+      "Iteration 3900 complete..\n",
+      "cur_weight[0.9062979032603252,0.06988223739973833]\n",
+      "Iteration 4000 complete..\n",
+      "cur_weight[0.9141681820335911,0.06794280374825126]\n",
+      "Iteration 4100 complete..\n",
+      "cur_weight[0.9217443209843464,0.06794784668751239]\n",
+      "Iteration 4200 complete..\n",
+      "cur_weight[0.9289361288853595,0.06533805490914883]\n",
+      "Iteration 4300 complete..\n",
+      "cur_weight[0.9358681884508162,0.063747463827756]\n",
+      "Iteration 4400 complete..\n",
+      "cur_weight[0.9425566414363481,0.06583898718964308]\n",
+      "Iteration 4500 complete..\n",
+      "cur_weight[0.9489776699650752,0.057065849880834296]\n",
+      "Iteration 4600 complete..\n",
+      "cur_weight[0.9556489272395575,0.04640912053536678]\n",
+      "Iteration 4700 complete..\n",
+      "cur_weight[0.9622969439838518,0.044112311957109275]\n",
+      "Iteration 4800 complete..\n",
+      "cur_weight[0.9686317068369886,0.04691037241784665]\n",
+      "Iteration 4900 complete..\n",
+      "cur_weight[0.9746014714755125,0.049442258326171516]\n",
+      "Iteration 5000 complete..\n",
+      "cur_weight[0.9802742726571357,0.04945428260311635]\n",
+      "500000000 parsed.\n"
+     ]
+    },
+    {
+     "data": {
+      "text/plain": [
+       "Poisson_regression([0.980274,0.0494543],-0.010645128901871245,0.01,1.0,499900000,2)"
+      ]
+     },
+     "execution_count": 15,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "#this is a psuedo main function now\n",
+    "\n",
+    "#making an array of bamfiles\n",
+    "#path of where the bam files are stored\n",
+    "root = \"/scratch/hiranumn\"\n",
+    "\n",
+    "#reading in bam files\n",
+    "#target\n",
+    "target = BamReader(\"$root/ENCSR000AHE/ENCFF000QQG.bam\", false, ReferenceContigs_hg38)\n",
+    "#controls \n",
+    "c1 = BamReader(\"$root/ENCSR000AHE/ENCFF000QQG.bam\", false, ReferenceContigs_hg38)\n",
+    "c2 = BamReader(\"$root/ENCSR000BVS/ENCFF000OXP.bam\", false, ReferenceContigs_hg38)\n",
+    "readers = [target, c1, c2]\n",
+    "\n",
+    "#create a dense block object for controls \n",
+    "blocksize = 100000\n",
+    "db = denseblocks(readers, blocksize)\n",
+    "\n",
+    "#create a dense block object for target\n",
+    "\n",
+    "#creating a poission regressor\n",
+    "model = poisson_regression(eta=0.01)\n",
+    "\n",
+    "#fit with poisson regression\n",
+    "itr = 1\n",
+    "itrlimit = 5000\n",
+    "\n",
+    "while itr < itrlimit\n",
+    "    y, x = next(db, nil)\n",
+    "    model = fit(model, y, x)\n",
+    "    itr += 1\n",
+    "    if itr%100==0\n",
+    "        println(\"Iteration \", itr, \" complete..\")\n",
+    "        println(\"cur_weight\", model.w)\n",
+    "    end\n",
+    "end \n",
+    "\n",
+    "println(blocksize*itrlimit,\" parsed.\")\n",
+    "\n",
+    "model \n",
+    "\n",
+    "    \n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Julia 0.3.8",
+   "language": "julia",
+   "name": "julia-0.3"
+  },
+  "language_info": {
+   "name": "julia",
+   "version": "0.3.8"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 0
+}
