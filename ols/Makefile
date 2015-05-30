@@ -1,2 +1,2 @@
 all:
-	g++ -O2 -I . main.cpp BamReader.cpp ContigsHg38.cpp FeatureBlocks.cpp -larmadillo /usr/local/Cellar/boost/1.55.0/lib/libboost_iostreams.a /usr/local/Cellar/zlib/1.2.8/lib/libz.a -std=c++11 -o pure-seq 
+	g++ -O2 -I . main.cpp BamReader.cpp ContigsHg38.cpp FeatureBlocks.cpp -larmadillo -lboost_iostreams -lz -std=c++0x -o pure-seq -L /homes/gws/slund1/lib -I /homes/gws/slund1/local/include
